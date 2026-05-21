@@ -1,4 +1,4 @@
-  import streamlit as st
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -203,4 +203,3 @@ if st.button("📊 Institutionellen Wetterbericht & Top 10 Aktien laden"):
         st.subheader("🌐 Globales Index-Dashboard")
         idx_rows = [{ "Index / Asset": k, "Aktueller Kurs": v["Kurs"], "Tagesperformance": f"{round(v['Perf 24h'], 2)}%", "RSI (14d)": v["RSI"], "Technischer Score": f"{v['Score']}/100" } for k, v in index_data.items()]
         st.table(pd.DataFrame(idx_rows))
-  
