@@ -1,23 +1,15 @@
-import streamlit as st
+  import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="Profi US Market Weather", page_icon="⛈️", layout="wide")
+st.set_page_config(page_title="Profi US Market Weather & Rotation", page_icon="⛈️", layout="wide")
 
-st.title("🌤️ Profi-US-Börsenwetter & institutionelles Sentiment")
-st.markdown("Dieses Tool kombiniert technische Indikatoren (RSI, MACD, EMAs) mit den wichtigsten makroökonomischen Treibern der Wall Street (**VIX, Anleiherenditen & Risk-On-Verhältnis**).")
+st.title("🌤️ Profi-US-Börsenwetter & Top 10 Rotations-Aktien")
+st.markdown("Dieses Tool analysiert das Wall-Street-Sentiment und filtert **automatisch die 20 am stärksten betroffenen Aktien** (10 Gewinner, 10 Verlierer) aus den rotierenden Sektoren heraus.")
 
-# --- INDIZES & MAKRO-DATEN ---
-INDIZES = {
-    "S&P 500 ETF (SPY)": "SPY",
-    "Nasdaq 100 ETF (QQQ)": "QQQ",
-    "Russell 2000 (Small Caps)": "^RUT",
-    "Dow Jones Industrial": "^DJI",
-    "Dax (Deutschland)": "^GDAXI",
-    "Nikkei 225 (Japan)": "^N225"
-}
-
+# --- SEKTOR-ETFS ---
 SEKTOREN = {
     "Technologie (XLK)": "XLK",
     "Finanzen (XLF)": "XLF",
@@ -31,7 +23,21 @@ SEKTOREN = {
     "Immobilien (XLRE)": "XLRE"
 }
 
-def analyze_sentiment(ticker):
+# --- ERWEITERTE AKTIEN-MATRIX (15 Top-Aktien pro Sektor für verlässliche Top 10 Ergebnisse) ---
+SEKTOR_AKTIEN = {
+    "XLK": ["AAPL", "MSFT", "NVDA", "AVGO", "AMD", "QCOM", "ORCL", "CSCO", "INTU", "AMAT", "PANW", "MU", "ADI", "NOW", "LRCX"],
+    "XLF": ["JPM", "BAC", "MS", "GS", "WFC", "C", "BRK-B", "BLK", "SPGI", "AXP", "V", "MA", "SCHW", "CB", "MMC"],
+    "XLV": ["LLY", "UNH", "JNJ", "ABBV", "MRK", "TMO", "PFE", "ABT", "DHR", "AMGN", "ISRG", "GILD", "VRTX", "REGN", "BMY"],
+    "XLY": ["AMZN", "TSLA", "HD", "MCD", "NKE", "LOW", "SBUX", "BKNG", "TJX", "ORLY", "CMG", "MAR", "NCLH", "RCL", "F"],
+    "XLE": ["XOM", "CVX", "COP", "SLB", "EOG", "MPC", "PSX", "VLO", "HES", "HAL", "BKR", "DVN", "FANG", "WMB", "OXY"],
+    "XLI": ["GE", "CAT", "UNP", "HON", "RTX", "LMT", "UPS", "BA", "DE", "MMM", "ADP", "WM", "FEDX", "NOC", "CSX"],
+    "XLP": ["PG", "COST", "KO", "PEP", "WMT", "PM", "MO", "MDLZ", "CL", "KHC", "GIS", "STZ", "SYY", "EL", "KR"],
+    "XLU": ["NEE", "SO", "DUK", "CEG", "AEP", "D", "EXC", "SRE", "XEL", "ED", "PEG", "WEC", "AWK", "EIX", "FE"],
+    "XLB": ["LIN", "APD", "SHW", "FCX", "NUE", "ECL", "DD", "CTVA", "ALB", "NEM", "PPG", "VMC", "MLM", "CF", "MOS"],
+    "XLRE": ["PLD", "AMT", "EQIX", "WELL", "O", "CCI", "PSA", "DLR", "WY", "AVB", "EQR", "VICI", "SBAC", "CBRE", "IRM"]
+}
+
+def analyze_stock_or_index(ticker, is_index_or_sector=True):
     try:
         stock = yf.Ticker(ticker)
         hist = stock.history(period="1y")
@@ -71,6 +77,7 @@ def analyze_sentiment(ticker):
         macd_score = 25 if macd.iloc[-1] > signal.iloc[-1] else 0
         
         return {
+            "Ticker": ticker,
             "Kurs": round(last_close, 2),
             "Perf 24h": perf_24h,
             "RSI": round(rsi, 1),
@@ -80,138 +87,120 @@ def analyze_sentiment(ticker):
         return None
 
 # --- ENGINE ---
-if st.button("📊 Institutionellen Wetterbericht erstellen"):
-    with st.spinner("Frage Wall-Street-Daten, VIX und Staatsanleihen ab..."):
+if st.button("📊 Institutionellen Wetterbericht & Top 10 Aktien laden"):
+    with st.spinner("Berechne Markt-Wetter, Sektoren und filtere die Top 20 Rotations-Aktien..."):
         
-        # 1. Makro-Daten live ziehen
-        vix_ticker = yf.Ticker("^VIX")
-        vix_hist = vix_ticker.history(period="5d")
+        # 1. Makro-Daten ziehen
+        vix_hist = yf.Ticker("^VIX").history(period="5d")
         current_vix = vix_hist['Close'].iloc[-1] if not vix_hist.empty else 15.0
-        
-        us10y_ticker = yf.Ticker("^TNX") # ^TNX = 10 Year Treasury Note Yield (*10)
-        us10y_hist = us10y_ticker.history(period="5d")
-        current_us10y = (us10y_hist['Close'].iloc[-1] / 10) if not us10y_hist.empty else 4.0
+        us10y_hist = yf.Ticker("^TNX").history(period="5d")
+        current_us10y = (us10y_hist['Close'].iloc[-2] / 10) if not us10y_hist.empty else 4.0
 
-        # 2. Indizes abrufen
+        # 2. Haupt-Indizes parallel scannen
+        INDIZES = {"S&P 500 (SPY)": "SPY", "Nasdaq 100 (QQQ)": "QQQ", "Russell 2000": "^RUT", "Dow Jones": "^DJI", "DAX": "^GDAXI", "Nikkei 225": "^N225"}
         index_data = {}
-        total_us_score = 0
-        us_count = 0
+        total_us_score, us_count = 0, 0
         
         for name, ticker in INDIZES.items():
-            res = analyze_sentiment(ticker)
+            res = analyze_stock_or_index(ticker)
             if res:
                 index_data[name] = res
                 if ticker in ["SPY", "QQQ", "^RUT", "^DJI"]:
                     total_us_score += res["Score"]
                     us_count += 1
-                    
         base_score = total_us_score // us_count if us_count > 0 else 50
-        
-        # --- INSTITUTIONELLE SCORE-ANPASSUNG (VIX-Malus/Bonus) ---
-        if current_vix > 22:
-            market_score = max(0, base_score - 15) # Abzug wegen hoher Panik
-        elif current_vix < 13:
-            market_score = min(100, base_score + 10) # Bonus wegen extremer Stabilität
-        else:
-            market_score = base_score
+        market_score = max(0, base_score - 15) if current_vix > 22 else (min(100, base_score + 10) if current_vix < 13 else base_score)
 
-        # 3. Sektoren abrufen
+        # 3. Sektoren scannen
         sector_perf = []
         for name, ticker in SEKTOREN.items():
-            res = analyze_sentiment(ticker)
+            res = analyze_stock_or_index(ticker)
             if res:
-                sector_perf.append({
-                    "Sektor": name,
-                    "Tagesperformance": res["Perf 24h"],
-                    "Trend-Score": res["Score"]
-                })
+                sector_perf.append({"SektorName": name, "SektorTicker": ticker, "Tagesperformance": res["Perf 24h"], "Trend-Score": res["Score"]})
         df_sectors = pd.DataFrame(sector_perf).sort_values(by="Tagesperformance", ascending=False)
 
-        # --- OBERFLÄCHE: METRIKEN-DASHBOARD ---
+        # --- SEKTOR ROTATION AKTIEN FILTERUNG ---
+        top_sector_id = df_sectors.iloc[0]["SektorTicker"]
+        bottom_sector_id = df_sectors.iloc[-1]["SektorTicker"]
+        
+        aktien_zu_scannen = SEKTOR_AKTIEN[top_sector_id] + SEKTOR_AKTIEN[bottom_sector_id]
+        aktien_ergebnisse = []
+        
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = [executor.submit(analyze_stock_or_index, t) for t in aktien_zu_scannen]
+            for future in futures:
+                r = future.result()
+                if r: aktien_ergebnisse.append(r)
+                
+        df_all_stocks = pd.DataFrame(aktien_ergebnisse)
+        
+        # Filter Top 10 Gewinner (aus Top Sektor, sortiert nach bestem Score)
+        df_winners = df_all_stocks[df_all_stocks["Ticker"].isin(SEKTOR_AKTIEN[top_sector_id])].sort_values(by="Score", ascending=False).head(10)
+        # Filter Top 10 Verlierer (aus Flop Sektor, sortiert nach schlechtestem Score)
+        df_losers = df_all_stocks[df_all_stocks["Ticker"].isin(SEKTOR_AKTIEN[bottom_sector_id])].sort_values(by="Score", ascending=True).head(10)
+
+        # --- OBERFLÄCHE: METRIKEN ---
         st.subheader("🚨 Institutionelle Risiko-Kennzahlen")
         m_col1, m_col2, m_col3 = st.columns(3)
-        
         with m_col1:
-            vix_status = "🟢 Ruhig" if current_vix < 15 else ("🟡 Nervös" if current_vix <= 22 else "🔴 PANIK")
-            st.metric(label=f"VIX (Angst-Index): {vix_status}", value=f"{round(current_vix, 2)} Pkt.", delta=f"{round(current_vix - vix_hist['Close'].iloc[-2], 2)} Pkt.", delta_color="inverse")
-            
+            st.metric(label=f"VIX (Angst-Index)", value=f"{round(current_vix, 2)} Pkt.")
         with m_col2:
-            st.metric(label="US-Zinsen (10 Jahre Staatsanleihen)", value=f"{round(current_us10y, 3)}%", delta=f"{round(current_us10y - (us10y_hist['Close'].iloc[-2]/10), 3)}%", delta_color="inverse")
-            
+            st.metric(label="US-Zinsen (10J Rendite)", value=f"{round(current_us10y, 3)}%")
         with m_col3:
-            # Risk-On / Off Verhältnis ermitteln
-            rut_perf = index_data.get("Russell 2000 (Small Caps)", {}).get("Perf 24h", 0)
-            spy_perf = index_data.get("S&P 500 ETF (SPY)", {}).get("Perf 24h", 0)
-            risk_ratio = rut_perf - spy_perf
-            risk_text = "🚀 RISK-ON (Spekulativ stark)" if risk_ratio > 0.3 else ("🛡️ RISK-OFF (Flucht in Large Caps)" if risk_ratio < -0.3 else "⚖️ Neutrale Verteilung")
-            st.metric(label="Markt-Modus", value=risk_text, delta=f"{round(risk_ratio, 2)}% Differenz")
+            risk_ratio = index_data.get("Russell 2000", {}).get("Perf 24h", 0) - index_data.get("S&P 500 (SPY)", {}).get("Perf 24h", 0)
+            st.metric(label="Markt-Modus", value="🚀 RISK-ON" if risk_ratio > 0.3 else ("🛡️ RISK-OFF" if risk_ratio < -0.3 else "⚖️ Neutral"))
 
         st.markdown("---")
 
         # --- MAIN WEATHER REPORT ---
         st.subheader("🇺🇸 Das kombinierte US-Börsenwetter")
         col1, col2 = st.columns([1, 2])
-        
         with col1:
-            if market_score >= 75:
-                st.markdown("# ☀️ STRAHLENDER SONNENSCHEIN")
-                st.success(f"**Gesamt-Sentiment: {market_score}%** \n\nPerfekte Bedingungen. Niedriger VIX schützt nach unten ab. Die Bullen haben die vollständige Kontrolle über die EMAs.")
-            elif 55 <= market_score < 75:
-                st.markdown("# 🌤️ LEICHT BEWÖLKT")
-                st.info(f"**Gesamt-Sentiment: {market_score}%** \n\nDer Markt ist stabil, aber die Zinsen oder der VIX mahnen zu leichter Vorsicht. Swing-Trading läuft gut.")
-            elif 40 <= market_score < 55:
-                st.markdown("# 🌧️ REGENWETTER")
-                st.warning(f"**Gesamt-Sentiment: {market_score}%** \n\nPreise rutschen unter wichtige EMAs. Institutionelle Händler halten sich zurück. Absichern!")
-            else:
-                st.markdown("# ⛈️ SCHWERES UNWETTER / REZESSIONS-ANGST")
-                st.error(f"**Gesamt-Sentiment: {market_score}%** \n\nDer VIX kocht über oder die EMAs sind komplett gebrochen. Akute Gefahr für Hebel-Käufe.")
-
+            if market_score >= 75: st.markdown("# ☀️ STRAHLENDER SONNENSCHEIN")
+            elif 55 <= market_score < 75: st.markdown("# 🌤️ LEICHT BEWÖLKT")
+            elif 40 <= market_score < 55: st.markdown("# 🌧️ REGENWETTER")
+            else: st.markdown("# ⛈️ SCHWERES UNWETTER")
+            st.info(f"**Gesamt-Sentiment: {market_score}%**")
         with col2:
             st.markdown("### 🏹 Taktischer Trading-Fahrplan für heute:")
-            if market_score >= 75:
-                st.markdown(f"> **HEUTE AGGRESSIV:** Der Markt belohnt Risiko. Nutze Ausbrüche über den EMA 10/20 bei starken Einzelaktien. VIX bei {round(current_vix, 1)} signalisiert freie Fahrt.")
-            elif 55 <= market_score < 75:
-                st.markdown("> **HEUTE SELEKTIV:** Investieren ja, aber Stopp-Losses enger nachziehen. Keine gierigen Übergewichtungen vornehmen.")
-            elif 40 <= market_score < 55:
-                st.markdown("> **HEUTE DEFENSIV:** Reduziere die Positionsgrößen um die Hälfte. Kaufe nur, wenn Werte extrem überverkauft am Support aufschlagen.")
-            else:
-                st.markdown("> **HEUTE CASH HALTEN:** Institutionelle löschen Risiken. Jeder Intraday-Anstieg droht abverkauft zu werden. Fokus auf Kapitalerhalt.")
+            if market_score >= 55: st.markdown("> **FOKUS GEWINNER:** Schau dir die **Top 10 Rotations-Gewinner** an. Diese Aktien reiten die aktuelle Sektorwelle am saubersten nach oben.")
+            else: st.markdown("> **VORSICHT / SHORT-FOKUS:** Defensiver Modus. Die **Top 10 Rotations-Verlierer** zeigen schwere technische Schwächen und sind stark rückschlagsgefährdet.")
 
         st.markdown("---")
         
-        # --- DASHBOARDS ---
-        st.subheader("🌐 Globales Index-Dashboard")
-        idx_rows = []
-        for name, data in index_data.items():
-            status = "🔥 Bullisch" if data["Score"] >= 70 else ("⚖️ Neutral" if data["Score"] >= 45 else "🚨 Bärisch")
-            idx_rows.append({
-                "Index / Asset": name,
-                "Aktueller Kurs": data["Kurs"],
-                "Tagesperformance": f"{round(data['Perf 24h'], 2)}%",
-                "RSI (14d)": data["RSI"],
-                "Technischer Score": f"{data['Score']}/100",
-                "Zustand": status
-            })
-        st.table(pd.DataFrame(idx_rows))
-
-        st.markdown("---")
-
+        # --- SEKTOREN ---
         st.subheader("🔄 US-Sektoren-Analyse")
         col_sec1, col_sec2 = st.columns(2)
         with col_sec1:
-            st.markdown("### 📈 Top Zuflüsse")
-            st.dataframe(df_sectors.head(4).style.format({"Tagesperformance": "{:,.2f}%"}), use_container_width=True)
+            st.markdown("### 📈 Top Zuflüsse (Stärkster Sektor)")
+            st.dataframe(df_sectors.head(1)[["SektorName", "Tagesperformance", "Trend-Score"]], use_container_width=True, hide_index=True)
         with col_sec2:
-            st.markdown("### 📉 Top Abflüsse")
-            st.dataframe(df_sectors.tail(4).style.format({"Tagesperformance": "{:,.2f}%"}), use_container_width=True)
-            
-        st.markdown("### 🧠 Rotations-Auswertung")
-        top_sector = df_sectors.iloc[0]["Sektor"]
-        bottom_sector = df_sectors.iloc[-1]["Sektor"]
+            st.markdown("### 📉 Top Abflüsse (Schwächster Sektor)")
+            st.dataframe(df_sectors.tail(1)[["SektorName", "Tagesperformance", "Trend-Score"]], use_container_width=True, hide_index=True)
+
+        # --- DIE 20 ROTATIONS AKTIEN (10 GEWINNER / 10 VERLIERER) ---
+        st.markdown("---")
+        st.subheader("🎯 Die 20 Fokus-Aktien der aktuellen Sektoren-Rotation")
         
-        if "Technologie" in top_sector and ("Basis-Konsumgüter" in bottom_sector or "Versorger" in bottom_sector):
-            st.info(f"**Smart-Money-Fluss:** Großinvestoren schichten Geld in Wachstum (**{top_sector}**). Absolut gesundes Marktumfeld.")
-        elif ("Versorger" in top_sector or "Basis-Konsumgüter" in top_sector) and "Technologie" in bottom_sector:
-            st.warning(f"**Smart-Money-Fluss:** Institutionelle fliehen aus Wachstum und verstecken sich im defensiven Sektor (**{top_sector}**). Große Vorsicht geboten!")
-        else:
-            st.info(f"Aktuell führt der Sektor **{top_sector}** den Markt an, während **{bottom_sector}** relative Schwäche zeigt. Achte auf Fortsetzung dieser Bewegung.")
+        col_st1, col_st2 = st.columns(2)
+        
+        with col_st1:
+            st.markdown(f"### 🚀 Top 10 Gewinner (Sektor: {df_sectors.iloc[0]['SektorName']})")
+            df_winners_show = df_winners.rename(columns={"Perf 24h": "Tages-Perf", "Score": "Swing-Score"})
+            df_winners_show["Tages-Perf"] = df_winners_show["Tages-Perf"].map("{:,.2f}%".format)
+            df_winners_show["Trading-Link"] = df_winners_show["Ticker"].apply(lambda t: f"https://www.tradingview.com/chart/?symbol=NASDAQ:{t}")
+            st.data_editor(df_winners_show, column_config={"Trading-Link": st.column_config.LinkColumn("Chart", display_text="↗ Chart")}, disabled=True, use_container_width=True, hide_index=True, height=380)
+            
+        with col_st2:
+            st.markdown(f"### 📉 Top 10 Verlierer (Sektor: {df_sectors.iloc[-1]['SektorName']})")
+            df_losers_show = df_losers.rename(columns={"Perf 24h": "Tages-Perf", "Score": "Swing-Score"})
+            df_losers_show["Tages-Perf"] = df_losers_show["Tages-Perf"].map("{:,.2f}%".format)
+            df_losers_show["Trading-Link"] = df_losers_show["Ticker"].apply(lambda t: f"https://www.tradingview.com/chart/?symbol=NASDAQ:{t}")
+            st.data_editor(df_losers_show, column_config={"Trading-Link": st.column_config.LinkColumn("Chart", display_text="↗ Chart")}, disabled=True, use_container_width=True, hide_index=True, height=380)
+
+        st.markdown("---")
+        # --- GLOBALER DASHBOARD GANZ UNTEN ---
+        st.subheader("🌐 Globales Index-Dashboard")
+        idx_rows = [{ "Index / Asset": k, "Aktueller Kurs": v["Kurs"], "Tagesperformance": f"{round(v['Perf 24h'], 2)}%", "RSI (14d)": v["RSI"], "Technischer Score": f"{v['Score']}/100" } for k, v in index_data.items()]
+        st.table(pd.DataFrame(idx_rows))
+  
