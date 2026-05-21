@@ -32,11 +32,10 @@ SEKTOREN = {
     "Immobilien (XLRE)": "XLRE"
 }
 
-# --- BERECHNUNGS-FUNKTION FÜR SETIMENT ---
+# --- BERECHNUNGS-FUNKTION FÜR SENTIMENT ---
 def analyze_sentiment(ticker):
     try:
         stock = yf.Ticker(ticker)
-        # Wir brauchen 1 Jahr Daten, um den EMA 200 sauber zu berechnen
         hist = stock.history(period="1y")
         if hist.empty or len(hist) < 200:
             return None
@@ -54,7 +53,7 @@ def analyze_sentiment(ticker):
         for p in emas:
             ema_values[p] = close.ewm(span=p, adjust=False).mean().iloc[-1]
             if last_close > ema_values[p]:
-                ema_score += (50 / 5) # Jeder EMA über dem Kurs gibt Punkte (Max 50 Punkte)
+                ema_score += (50 / 5)
                 
         # RSI berechnen
         delta = close.diff()
@@ -64,9 +63,9 @@ def analyze_sentiment(ticker):
         rsi = (100 - (100 / (1 + rs))).iloc[-1]
         
         rsi_score = 0
-        if 45 <= rsi <= 65: rsi_score = 25  # Stabiler Aufwärtstrend
-        elif 30 <= rsi < 45: rsi_score = 15 # Leicht überverkauft / Bodenbildung
-        elif 65 < rsi <= 75: rsi_score = 10 # Heiß gelaufen, aber stark
+        if 45 <= rsi <= 65: rsi_score = 25
+        elif 30 <= rsi < 45: rsi_score = 15
+        elif 65 < rsi <= 75: rsi_score = 10
         
         # MACD berechnen
         exp1 = close.ewm(span=12, adjust=False).mean()
@@ -74,9 +73,8 @@ def analyze_sentiment(ticker):
         macd = exp1 - exp2
         signal = macd.ewm(span=9, adjust=False).mean()
         
-        macd_score = 25 if macd.iloc[-1] > signal.iloc[-1] else 0 # Bullisch gegen Bärisch (Max 25 Punkte)
+        macd_score = 25 if macd.iloc[-1] > signal.iloc[-1] else 0
         
-        # Gesamtscore (Max 100)
         total_score = int(ema_score + rsi_score + macd_score)
         
         return {
@@ -92,7 +90,6 @@ def analyze_sentiment(ticker):
 if st.button("📊 Globalen Markt-Wetterbericht erstellen"):
     with st.spinner("Sammle Daten von den globalen Börsenplätzen..."):
         
-        # 1. Indizes scannen
         index_data = {}
         total_us_score = 0
         us_count = 0
@@ -105,10 +102,8 @@ if st.button("📊 Globalen Markt-Wetterbericht erstellen"):
                     total_us_score += res["Score"]
                     us_count += 1
                     
-        # Durchschnittlicher US Markt-Wetter-Score
         market_score = total_us_score // us_count if us_count > 0 else 50
         
-        # 2. Sektoren scannen
         sector_perf = []
         for name, ticker in SEKTOREN.items():
             res = analyze_sentiment(ticker)
@@ -152,12 +147,11 @@ if st.button("📊 Globalen Markt-Wetterbericht erstellen"):
 
         st.markdown("---")
         
-        # --- INDIZES REPROT ---
+        # --- INDIZES REPORT ---
         st.subheader("🌐 Globales Index-Dashboard (Technischer Zustand)")
         
         idx_rows = []
         for name, data in index_data.items():
-            # Kurzer Text-Zustand je nach Score
             status = "🔥 Bullisch" if data["Score"] >= 70 else ("⚖️ Neutral" if data["Score"] >= 45 else "🚨 Bärisch")
             idx_rows.append({
                 "Index / Asset": name,
@@ -184,7 +178,6 @@ if st.button("📊 Globalen Markt-Wetterbericht erstellen"):
             st.markdown("### 📉 Verlierer-Sektoren (Hier ziehen sich Investoren zurück)")
             st.dataframe(df_sectors.tail(4).style.format({"Tagesperformance": "{:,.2f}%"}), use_container_width=True)
             
-        # Automatische Erkennung einer Sektoren-Rotation
         st.markdown("### 🧠 Rotations-Auswertung")
         top_sector = df_sectors.iloc[0]["Sektor"]
         bottom_sector = df_sectors.iloc[-1]["Sektor"]
@@ -194,4 +187,5 @@ if st.button("📊 Globalen Markt-Wetterbericht erstellen"):
         elif ("Versorger" in top_sector or "Basis-Konsumgüter" in top_sector) and "Technologie" in bottom_sector:
             st.warning(f"**Beobachtung:** Achtung! Es findet eine Rotation in **Risk-Off (Defensiv)** statt. Investoren flüchten aus Tech in sichere Häfen wie Versorger. Das deutet auf Angst vor einer Korrektur hin.")
         else:
-            st.lightbulb(f"Aktuell führt der Sektor **{top_sector}** den Markt an, während **{bottom_sector}** relative Schwäche zeigt. Achte darauf, ob diese Dynamik über die nächsten Tage anhält!")
+            # HIER IST DIE REPARIERTE ZEILE: st.info statt st.lightbulb
+            st.info(f"Aktuell führt der Sektor **{top_sector}** den Markt an, während **{bottom_sector}** relative Schwäche zeigt. Achte darauf, ob diese Dynamik über die nächsten Tage anhält!")
