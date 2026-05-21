@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(page_title="Profi US Market Weather & Signals", page_icon="⛈️", layout="wide")
 
-st.title("🌤️ Profi-US-Börsenwetter & Index-Kaufsignale")
-st.markdown("Dieses Tool analysiert das Wall-Street-Sentiment und gibt für jeden globalen Index eine **direkte Kauf- oder Meiden-Empfehlung** aus.")
+st.title("🌤️ Profi-US-Börsenwetter & Realtime-Kaufsignale")
+st.markdown("Dieses Tool nutzt **Echtzeit- und Premarket-Kurse**, um das Wall-Street-Sentiment und die Top-Aktien der aktuellen Sektoren-Rotation zu scannen.")
 
 # --- SEKTOR-ETFS ---
 SEKTOREN = {
@@ -23,7 +23,7 @@ SEKTOREN = {
     "Immobilien (XLRE)": "XLRE"
 }
 
-# --- ERWEITERTE AKTIEN-MATRIX ---
+# --- AKTIEN-MATRIX ---
 SEKTOR_AKTIEN = {
     "XLK": ["AAPL", "MSFT", "NVDA", "AVGO", "AMD", "QCOM", "ORCL", "CSCO", "INTU", "AMAT", "PANW", "MU", "ADI", "NOW", "LRCX"],
     "XLF": ["JPM", "BAC", "MS", "GS", "WFC", "C", "BRK-B", "BLK", "SPGI", "AXP", "V", "MA", "SCHW", "CB", "MMC"],
@@ -37,10 +37,11 @@ SEKTOR_AKTIEN = {
     "XLRE": ["PLD", "AMT", "EQIX", "WELL", "O", "CCI", "PSA", "DLR", "WY", "AVB", "EQR", "VICI", "SBAC", "CBRE", "IRM"]
 }
 
-def analyze_stock_or_index(ticker, is_index_or_sector=True):
+def analyze_stock_or_index(ticker):
     try:
         stock = yf.Ticker(ticker)
-        hist = stock.history(period="1y")
+        # TIPP: prepost=True sorgt dafür, dass yfinance den echten Premarket- & Afterhours-Kurs zieht!
+        hist = stock.history(period="1y", prepost=True)
         if hist.empty or len(hist) < 200:
             return None
         
@@ -78,7 +79,7 @@ def analyze_stock_or_index(ticker, is_index_or_sector=True):
         
         score = int(ema_score + rsi_score + macd_score)
         
-        # --- LOGIK FÜR DAS KAUFSIGNAL ---
+        # Signallogik
         if score >= 75 and rsi < 68:
             signal_text = "🟢 JETZT KAUFEN"
         elif score >= 50 and rsi < 75:
@@ -98,16 +99,16 @@ def analyze_stock_or_index(ticker, is_index_or_sector=True):
         return None
 
 # --- ENGINE ---
-if st.button("📊 Institutionellen Wetterbericht & Kaufsignale laden"):
-    with st.spinner("Berechne Markt-Wetter, Sektoren und generiere Kaufsignale..."):
+if st.button("📊 Realtime- & Premarket-Wetterbericht laden"):
+    with st.spinner("Frage Live-Kurse inklusive US-Premarket ab..."):
         
-        # 1. Makro-Daten ziehen
-        vix_hist = yf.Ticker("^VIX").history(period="5d")
+        # 1. Makro-Daten ziehen (VIX & US10Y) mit Extended-Hours-Support
+        vix_hist = yf.Ticker("^VIX").history(period="5d", prepost=True)
         current_vix = vix_hist['Close'].iloc[-1] if not vix_hist.empty else 15.0
-        us10y_hist = yf.Ticker("^TNX").history(period="5d")
+        us10y_hist = yf.Ticker("^TNX").history(period="5d", prepost=True)
         current_us10y = (us10y_hist['Close'].iloc[-2] / 10) if not us10y_hist.empty else 4.0
 
-        # 2. Haupt-Indizes parallel scannen
+        # 2. Indizes abfragen
         INDIZES = {"S&P 500 (SPY)": "SPY", "Nasdaq 100 (QQQ)": "QQQ", "Russell 2000": "^RUT", "Dow Jones": "^DJI", "DAX": "^GDAXI", "Nikkei 225": "^N225"}
         index_data = {}
         total_us_score, us_count = 0, 0
@@ -122,7 +123,7 @@ if st.button("📊 Institutionellen Wetterbericht & Kaufsignale laden"):
         base_score = total_us_score // us_count if us_count > 0 else 50
         market_score = max(0, base_score - 15) if current_vix > 22 else (min(100, base_score + 10) if current_vix < 13 else base_score)
 
-        # 3. Sektoren scannen
+        # 3. Sektoren abrufen
         sector_perf = []
         for name, ticker in SEKTOREN.items():
             res = analyze_stock_or_index(ticker)
@@ -130,7 +131,7 @@ if st.button("📊 Institutionellen Wetterbericht & Kaufsignale laden"):
                 sector_perf.append({"SektorName": name, "SektorTicker": ticker, "Tagesperformance": res["Perf 24h"], "Trend-Score": res["Score"]})
         df_sectors = pd.DataFrame(sector_perf).sort_values(by="Tagesperformance", ascending=False)
 
-        # --- SEKTOR ROTATION AKTIEN FILTERUNG ---
+        # --- SEKTOR ROTATION FILTERUNG ---
         top_sector_id = df_sectors.iloc[0]["SektorTicker"]
         bottom_sector_id = df_sectors.iloc[-1]["SektorTicker"]
         
@@ -148,7 +149,7 @@ if st.button("📊 Institutionellen Wetterbericht & Kaufsignale laden"):
         df_winners = df_all_stocks[df_all_stocks["Ticker"].isin(SEKTOR_AKTIEN[top_sector_id])].sort_values(by="Score", ascending=False).head(10)
         df_losers = df_all_stocks[df_all_stocks["Ticker"].isin(SEKTOR_AKTIEN[bottom_sector_id])].sort_values(by="Score", ascending=True).head(10)
 
-        # --- OBERFLÄCHE: METRIKEN ---
+        # --- SURFACE ---
         st.subheader("🚨 Institutionelle Risiko-Kennzahlen")
         m_col1, m_col2, m_col3 = st.columns(3)
         with m_col1:
@@ -161,7 +162,6 @@ if st.button("📊 Institutionellen Wetterbericht & Kaufsignale laden"):
 
         st.markdown("---")
 
-        # --- MAIN WEATHER REPORT ---
         st.subheader("🇺🇸 Das kombinierte US-Börsenwetter")
         col1, col2 = st.columns([1, 2])
         with col1:
@@ -177,19 +177,10 @@ if st.button("📊 Institutionellen Wetterbericht & Kaufsignale laden"):
 
         st.markdown("---")
         
-        # --- GLOBALER DASHBOARD JETZT HIER OBEN ---
-        st.subheader("🌐 Globales Index-Dashboard & Kaufsignale")
-        st.markdown("Diese Signale basieren auf der Auswertung von RSI, MACD und allen EMAs:")
-        idx_rows = [{ 
-            "Index / Asset": k, 
-            "Trading-Signal": v["Signal"], # Hier ist die neue Spalte!
-            "Aktueller Kurs": v["Kurs"], 
-            "Tagesperformance": f"{round(v['Perf 24h'], 2)}%", 
-            "RSI (14d)": v["RSI"], 
-            "Technischer Score": f"{v['Score']}/100" 
-        } for k, v in index_data.items()]
-        
-        # Darstellung als interaktiver Daten-Editor für eine noch cleanere Optik
+        # --- INDEX DASHBOARD ---
+        st.subheader("🌐 Globales Index-Dashboard & Realtime-Kaufsignale")
+        st.markdown("Diese Signale basieren auf den Live- oder Premarket-Kursen von RSI, MACD und allen EMAs:")
+        idx_rows = [{ "Index / Asset": k, "Trading-Signal": v["Signal"], "Aktueller Kurs": v["Kurs"], "Tagesperformance": f"{round(v['Perf 24h'], 2)}%", "RSI (14d)": v["RSI"], "Technischer Score": f"{v['Score']}/100" } for k, v in index_data.items()]
         st.data_editor(pd.DataFrame(idx_rows), use_container_width=True, disabled=True, hide_index=True)
 
         st.markdown("---")
