@@ -4,10 +4,10 @@ import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="Profi US Market Weather & Rotation", page_icon="⛈️", layout="wide")
+st.set_page_config(page_title="Profi US Market Weather & Signals", page_icon="⛈️", layout="wide")
 
-st.title("🌤️ Profi-US-Börsenwetter & Top 10 Rotations-Aktien")
-st.markdown("Dieses Tool analysiert das Wall-Street-Sentiment und filtert **automatisch die 20 am stärksten betroffenen Aktien** (10 Gewinner, 10 Verlierer) aus den rotierenden Sektoren heraus.")
+st.title("🌤️ Profi-US-Börsenwetter & Index-Kaufsignale")
+st.markdown("Dieses Tool analysiert das Wall-Street-Sentiment und gibt für jeden globalen Index eine **direkte Kauf- oder Meiden-Empfehlung** aus.")
 
 # --- SEKTOR-ETFS ---
 SEKTOREN = {
@@ -23,7 +23,7 @@ SEKTOREN = {
     "Immobilien (XLRE)": "XLRE"
 }
 
-# --- ERWEITERTE AKTIEN-MATRIX (15 Top-Aktien pro Sektor für verlässliche Top 10 Ergebnisse) ---
+# --- ERWEITERTE AKTIEN-MATRIX ---
 SEKTOR_AKTIEN = {
     "XLK": ["AAPL", "MSFT", "NVDA", "AVGO", "AMD", "QCOM", "ORCL", "CSCO", "INTU", "AMAT", "PANW", "MU", "ADI", "NOW", "LRCX"],
     "XLF": ["JPM", "BAC", "MS", "GS", "WFC", "C", "BRK-B", "BLK", "SPGI", "AXP", "V", "MA", "SCHW", "CB", "MMC"],
@@ -76,19 +76,30 @@ def analyze_stock_or_index(ticker, is_index_or_sector=True):
         signal = macd.ewm(span=9, adjust=False).mean()
         macd_score = 25 if macd.iloc[-1] > signal.iloc[-1] else 0
         
+        score = int(ema_score + rsi_score + macd_score)
+        
+        # --- LOGIK FÜR DAS KAUFSIGNAL ---
+        if score >= 75 and rsi < 68:
+            signal_text = "🟢 JETZT KAUFEN"
+        elif score >= 50 and rsi < 75:
+            signal_text = "⚠️ HALTEN / WARTEN"
+        else:
+            signal_text = "🔴 FINGER WEG (MEIDEN)"
+            
         return {
             "Ticker": ticker,
             "Kurs": round(last_close, 2),
             "Perf 24h": perf_24h,
             "RSI": round(rsi, 1),
-            "Score": int(ema_score + rsi_score + macd_score)
+            "Score": score,
+            "Signal": signal_text
         }
     except:
         return None
 
 # --- ENGINE ---
-if st.button("📊 Institutionellen Wetterbericht & Top 10 Aktien laden"):
-    with st.spinner("Berechne Markt-Wetter, Sektoren und filtere die Top 20 Rotations-Aktien..."):
+if st.button("📊 Institutionellen Wetterbericht & Kaufsignale laden"):
+    with st.spinner("Berechne Markt-Wetter, Sektoren und generiere Kaufsignale..."):
         
         # 1. Makro-Daten ziehen
         vix_hist = yf.Ticker("^VIX").history(period="5d")
@@ -134,9 +145,7 @@ if st.button("📊 Institutionellen Wetterbericht & Top 10 Aktien laden"):
                 
         df_all_stocks = pd.DataFrame(aktien_ergebnisse)
         
-        # Filter Top 10 Gewinner (aus Top Sektor, sortiert nach bestem Score)
         df_winners = df_all_stocks[df_all_stocks["Ticker"].isin(SEKTOR_AKTIEN[top_sector_id])].sort_values(by="Score", ascending=False).head(10)
-        # Filter Top 10 Verlierer (aus Flop Sektor, sortiert nach schlechtestem Score)
         df_losers = df_all_stocks[df_all_stocks["Ticker"].isin(SEKTOR_AKTIEN[bottom_sector_id])].sort_values(by="Score", ascending=True).head(10)
 
         # --- OBERFLÄCHE: METRIKEN ---
@@ -168,6 +177,23 @@ if st.button("📊 Institutionellen Wetterbericht & Top 10 Aktien laden"):
 
         st.markdown("---")
         
+        # --- GLOBALER DASHBOARD JETZT HIER OBEN ---
+        st.subheader("🌐 Globales Index-Dashboard & Kaufsignale")
+        st.markdown("Diese Signale basieren auf der Auswertung von RSI, MACD und allen EMAs:")
+        idx_rows = [{ 
+            "Index / Asset": k, 
+            "Trading-Signal": v["Signal"], # Hier ist die neue Spalte!
+            "Aktueller Kurs": v["Kurs"], 
+            "Tagesperformance": f"{round(v['Perf 24h'], 2)}%", 
+            "RSI (14d)": v["RSI"], 
+            "Technischer Score": f"{v['Score']}/100" 
+        } for k, v in index_data.items()]
+        
+        # Darstellung als interaktiver Daten-Editor für eine noch cleanere Optik
+        st.data_editor(pd.DataFrame(idx_rows), use_container_width=True, disabled=True, hide_index=True)
+
+        st.markdown("---")
+        
         # --- SEKTOREN ---
         st.subheader("🔄 US-Sektoren-Analyse")
         col_sec1, col_sec2 = st.columns(2)
@@ -178,7 +204,7 @@ if st.button("📊 Institutionellen Wetterbericht & Top 10 Aktien laden"):
             st.markdown("### 📉 Top Abflüsse (Schwächster Sektor)")
             st.dataframe(df_sectors.tail(1)[["SektorName", "Tagesperformance", "Trend-Score"]], use_container_width=True, hide_index=True)
 
-        # --- DIE 20 ROTATIONS AKTIEN (10 GEWINNER / 10 VERLIERER) ---
+        # --- DIE 20 ROTATIONS AKTIEN ---
         st.markdown("---")
         st.subheader("🎯 Die 20 Fokus-Aktien der aktuellen Sektoren-Rotation")
         
@@ -197,9 +223,3 @@ if st.button("📊 Institutionellen Wetterbericht & Top 10 Aktien laden"):
             df_losers_show["Tages-Perf"] = df_losers_show["Tages-Perf"].map("{:,.2f}%".format)
             df_losers_show["Trading-Link"] = df_losers_show["Ticker"].apply(lambda t: f"https://www.tradingview.com/chart/?symbol=NASDAQ:{t}")
             st.data_editor(df_losers_show, column_config={"Trading-Link": st.column_config.LinkColumn("Chart", display_text="↗ Chart")}, disabled=True, use_container_width=True, hide_index=True, height=380)
-
-        st.markdown("---")
-        # --- GLOBALER DASHBOARD GANZ UNTEN ---
-        st.subheader("🌐 Globales Index-Dashboard")
-        idx_rows = [{ "Index / Asset": k, "Aktueller Kurs": v["Kurs"], "Tagesperformance": f"{round(v['Perf 24h'], 2)}%", "RSI (14d)": v["RSI"], "Technischer Score": f"{v['Score']}/100" } for k, v in index_data.items()]
-        st.table(pd.DataFrame(idx_rows))
